@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Anodize Inspector — Missing-Etch &amp; Bare-Aluminum Detection</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#121316">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Inspector">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" href="icons/icon-192.png">
+<style>
+  :root{
+    --void:#121316; --panel:#1a1c20; --panel-2:#202226; --border:#2c2f35;
+    --alu:#c7ccd1; --alu-dim:#82878e; --laser:#5ad1e6; --laser-dim:#2c5a63;
+    --fail:#ff4b3e; --fail-dim:#4a201c; --pass:#3ddc84; --pass-dim:#1c3a2c; --amber:#ffb020;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Consolas, monospace;
+    --sans: ui-sans-serif, "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:var(--void);color:var(--alu);font-family:var(--sans);height:100%;}
+  body{background-image:radial-gradient(circle at 15% 10%, rgba(90,209,230,0.05), transparent 40%),radial-gradient(circle at 85% 90%, rgba(255,75,62,0.04), transparent 40%);min-height:100vh;}
+  .app{max-width:1220px;margin:0 auto;padding:18px 20px 40px;}
+  header.top{display:flex;align-items:center;justify-content:space-between;padding:14px 4px 18px;border-bottom:1px solid var(--border);margin-bottom:20px;flex-wrap:wrap;gap:10px;}
+  .brand{display:flex;align-items:center;gap:12px;}
+  .brand-mark{width:34px;height:34px;border:1.5px solid var(--laser);border-radius:3px;display:flex;align-items:center;justify-content:center;position:relative;background:linear-gradient(135deg, #0c0d0f, #1e2024);}
+  .brand-mark::after{content:"";position:absolute;inset:6px;border:1px dashed var(--laser-dim);}
+  .brand-mark svg{width:16px;height:16px;position:relative;z-index:1;}
+  .brand-text h1{font-size:15px;letter-spacing:0.14em;margin:0;font-weight:700;text-transform:uppercase;}
+  .brand-text p{margin:2px 0 0;font-size:11px;color:var(--alu-dim);letter-spacing:0.03em;font-family:var(--mono);}
+  .status-pill{font-family:var(--mono);font-size:10.5px;letter-spacing:0.08em;border:1px solid var(--border);color:var(--alu-dim);padding:5px 10px;border-radius:20px;display:flex;align-items:center;gap:6px;}
+  .status-pill .dot{width:6px;height:6px;border-radius:50%;background:var(--pass);box-shadow:0 0 6px var(--pass);}
+  .grid{display:grid;grid-template-columns:1.5fr 1fr;gap:18px;}
+  @media (max-width:900px){ .grid{grid-template-columns:1fr;} }
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:16px;position:relative;}
+  .panel-title{font-family:var(--mono);font-size:10.5px;letter-spacing:0.14em;color:var(--alu-dim);text-transform:uppercase;margin:0 0 12px;display:flex;justify-content:space-between;align-items:center;}
+  .panel-title .n{color:var(--laser);}
+  .mode-switch{display:flex;border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:16px;}
+  .mode-switch button{flex:1;border:none;border-radius:0;background:var(--panel-2);color:var(--alu-dim);font-size:11.5px;padding:10px 8px;letter-spacing:0.02em;}
+  .mode-switch button.active{background:var(--laser);color:#0c1315;font-weight:700;}
+  .mode-switch button:hover{color:var(--laser);}
+  .mode-switch button.active:hover{color:#0c1315;}
+  .mode-switch button:not(:last-child){border-right:1px solid var(--border);}
+  .stage-wrap{position:relative;border:1px solid var(--border);border-radius:4px;overflow:hidden;background:linear-gradient(var(--panel-2) 1px, transparent 1px) 0 0/100% 24px,linear-gradient(90deg, var(--panel-2) 1px, transparent 1px) 0 0/24px 100%,#0c0d0f;min-height:340px;display:flex;align-items:center;justify-content:center;}
+  .stage-wrap.scanning::before{content:"";position:absolute;left:0;right:0;height:2px;background:linear-gradient(90deg, transparent, var(--laser), transparent);box-shadow:0 0 12px 2px var(--laser);animation:sweep 1.1s linear;z-index:5;}
+  @keyframes sweep{ from{top:0;} to{top:100%;} }
+  #stage, #overlay{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:contain;}
+  #stage{position:relative;max-width:100%;display:block;cursor:crosshair;}
+  #overlay{pointer-events:none;}
+  video#cam{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:contain;display:none;background:#000;}
+  .placeholder{color:var(--alu-dim);font-family:var(--mono);font-size:12px;text-align:center;padding:30px;line-height:1.7;}
+  .placeholder b{color:var(--alu);}
+  .mode-hint{font-family:var(--mono);font-size:10.5px;color:var(--alu-dim);margin-top:8px;border-left:2px solid var(--laser);padding-left:8px;line-height:1.6;}
+  .mode-hint b{color:var(--laser);}
+  .toolbar{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;}
+  button{font-family:var(--sans);font-size:12.5px;font-weight:600;letter-spacing:0.01em;background:var(--panel-2);color:var(--alu);border:1px solid var(--border);padding:9px 14px;border-radius:5px;cursor:pointer;transition:border-color .15s, color .15s;}
+  button:hover{border-color:var(--laser);color:var(--laser);}
+  button:disabled{opacity:0.35;cursor:not-allowed;}
+  button:disabled:hover{border-color:var(--border);color:var(--alu);}
+  button.primary{background:var(--laser);color:#0c1315;border-color:var(--laser);}
+  button.primary:hover{filter:brightness(1.08);color:#0c1315;}
+  button.ghost{background:transparent;}
+  button.danger:hover{border-color:var(--fail);color:var(--fail);}
+  button.small{padding:6px 10px;font-size:11px;}
+  .btn-label{font-family:var(--sans);font-size:12.5px;font-weight:600;letter-spacing:0.01em;background:var(--panel-2);color:var(--alu);border:1px solid var(--border);padding:9px 14px;border-radius:5px;cursor:pointer;transition:border-color .15s, color .15s;display:inline-block;}
+  .btn-label:hover{border-color:var(--laser);color:var(--laser);}
+  label.field{display:block;font-family:var(--mono);font-size:10.5px;color:var(--alu-dim);letter-spacing:0.08em;text-transform:uppercase;margin-bottom:6px;}
+  .slider-row{display:flex;align-items:center;gap:10px;margin-bottom:16px;}
+  input[type=range]{flex:1;accent-color:var(--laser);}
+  .slider-val{font-family:var(--mono);font-size:12px;color:var(--laser);min-width:34px;text-align:right;}
+  .teach-switch{display:flex;gap:8px;margin-bottom:12px;}
+  .teach-switch button{flex:1;font-size:11.5px;padding:8px;}
+  .teach-switch button.active-target{background:var(--fail);border-color:var(--fail);color:#1a0d0c;}
+  .teach-switch button.active-bg{background:var(--pass);border-color:var(--pass);color:#0c1a12;}
+  .lib-block{margin-bottom:12px;}
+  .lib-head{display:flex;justify-content:space-between;align-items:center;font-family:var(--mono);font-size:10px;color:var(--alu-dim);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px;}
+  .lib-head .tag-target{color:var(--fail);}
+  .lib-head .tag-bg{color:var(--pass);}
+  .sample-list{display:flex;flex-wrap:wrap;gap:6px;min-height:26px;}
+  .swatch{width:20px;height:20px;border-radius:4px;border:1px solid var(--border);cursor:pointer;position:relative;}
+  .swatch:hover{outline:1.5px solid var(--fail);}
+  .swatch:hover::before{content:"×";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;background:rgba(0,0,0,0.55);border-radius:4px;}
+  .empty-note{font-family:var(--mono);font-size:10.5px;color:var(--alu-dim);font-style:italic;}
+  .divider{height:1px;background:var(--border);margin:16px 0;}
+  .result-badge{text-align:center;padding:22px 10px;border-radius:6px;border:1px solid var(--border);background:var(--panel-2);}
+  .result-badge .label{font-family:var(--mono);font-size:34px;font-weight:800;letter-spacing:0.05em;}
+  .result-badge.pass{border-color:var(--pass);background:linear-gradient(180deg, var(--pass-dim), var(--panel-2));}
+  .result-badge.pass .label{color:var(--pass);}
+  .result-badge.fail{border-color:var(--fail);background:linear-gradient(180deg, var(--fail-dim), var(--panel-2));}
+  .result-badge.fail .label{color:var(--fail);}
+  .result-badge .sub{font-family:var(--mono);font-size:11px;color:var(--alu-dim);margin-top:6px;letter-spacing:0.04em;}
+  .result-badge.idle .label{color:var(--alu-dim);font-size:20px;}
+  .metrics{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px;}
+  .metric{background:var(--panel-2);border:1px solid var(--border);border-radius:5px;padding:10px 12px;}
+  .metric .k{font-family:var(--mono);font-size:9.5px;color:var(--alu-dim);text-transform:uppercase;letter-spacing:0.08em;}
+  .metric .v{font-family:var(--mono);font-size:17px;color:var(--alu);margin-top:3px;}
+  .roi-list{display:flex;flex-direction:column;gap:6px;margin-top:10px;}
+  .roi-row{display:flex;align-items:center;justify-content:space-between;background:var(--panel-2);border:1px solid var(--border);border-radius:5px;padding:8px 10px;font-family:var(--mono);font-size:11px;}
+  .roi-row .tag{color:var(--alu-dim);}
+  .roi-row .val.ok{color:var(--pass);}
+  .roi-row .val.bad{color:var(--fail);}
+  .num-row{display:flex;align-items:center;gap:8px;}
+  input[type=number]{width:70px;background:var(--panel-2);border:1px solid var(--border);color:var(--alu);font-family:var(--mono);font-size:12px;padding:6px 8px;border-radius:4px;}
+  .instructions{font-size:12px;color:var(--alu-dim);line-height:1.75;margin:0;padding-left:18px;}
+  .instructions li::marker{color:var(--laser);font-family:var(--mono);}
+  .instructions b{color:var(--alu);}
+  footer.note{margin-top:22px;text-align:center;font-family:var(--mono);font-size:10.5px;color:var(--alu-dim);letter-spacing:0.04em;}
+  .reteach-banner{display:none;background:var(--panel-2);border:1px dashed var(--amber);border-radius:5px;padding:10px;margin-top:10px;font-family:var(--mono);font-size:11px;color:var(--amber);line-height:1.6;}
+  .lib-io{display:flex;gap:8px;margin-top:8px;}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <header class="top">
+    <div class="brand">
+      <div class="brand-mark"><svg viewBox="0 0 24 24" fill="none" stroke="var(--laser)" stroke-width="1.6"><rect x="3" y="3" width="18" height="18" rx="1"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></svg></div>
+      <div class="brand-text">
+        <h1>Anodize Inspector</h1>
+        <p id="brandSub">Missing-Etch Detection — Master Sample Library</p>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <button id="btnInstall" class="ghost" style="display:none;">Install App</button>
+      <div class="status-pill"><span class="dot"></span><span id="libStatus">LIBRARY LOADED</span></div>
+    </div>
+  </header>
+
+  <div class="grid">
+
+    <div class="panel">
+      <p class="panel-title">Part Image <span class="n" id="imgDims"></span></p>
+      <div class="stage-wrap" id="stageWrap">
+        <div class="placeholder" id="placeholder">No image loaded.<br><b>Upload a photo</b> or <b>start the camera</b> to begin inspection.</div>
+        <canvas id="stage"></canvas>
+        <canvas id="overlay"></canvas>
+        <video id="cam" playsinline autoplay muted></video>
+      </div>
+      <div class="toolbar">
+        <label for="fileInput" id="btnUpload" class="btn-label">Upload Image</label>
+        <input type="file" id="fileInput" accept="image/*" style="display:none">
+        <label for="cameraFileInput" id="btnTakePhoto" class="btn-label">Take Photo</label>
+        <input type="file" id="cameraFileInput" accept="image/*" capture="environment" style="display:none">
+        <button id="btnCamStart">Start Camera</button>
+        <button id="btnCapture" disabled>Capture Frame</button>
+        <button id="btnFlip" class="ghost" style="display:none;">Flip Preview</button>
+        <button id="btnClearRois" class="ghost" disabled>Clear Zones (this image)</button>
+        <button id="btnSaveTemplate" class="ghost" disabled>Save Zones as Template</button>
+        <button id="btnNewImage" class="ghost" disabled>New Image</button>
+      </div>
+      <div class="mode-hint" id="modeHint"></div>
+      <div class="reteach-banner" id="reteachBanner">⚠ Result looked wrong? Set "Teaching" below to the correct class, then click the mis-read spot on the image to add it to the library — the old samples stay, this just adds to them.</div>
+    </div>
+
+    <div class="panel">
+      <p class="panel-title">Inspection Mode</p>
+      <div class="mode-switch">
+        <button id="modeMissingBtn" class="active">Missing-Etch Check</button>
+        <button id="modeSurfaceBtn">Surface Defect Check</button>
+      </div>
+
+      <p class="panel-title">Teaching</p>
+      <div class="teach-switch">
+        <button id="teachTargetBtn" class="active-target">● <span id="targetLabel">Etch Mark</span></button>
+        <button id="teachBgBtn">● <span id="bgLabel">Normal Surface</span></button>
+      </div>
+
+      <p class="panel-title" style="margin-bottom:8px;">Master Sample Library</p>
+      <div class="lib-block">
+        <div class="lib-head"><span class="tag-target" id="targetHeadLabel">Etch / Defect Color</span><span id="targetCount">0</span></div>
+        <div class="sample-list" id="targetList"></div>
+      </div>
+      <div class="lib-block">
+        <div class="lib-head"><span class="tag-bg" id="bgHeadLabel">Normal Surface Color</span><span id="bgCount">0</span></div>
+        <div class="sample-list" id="bgList"></div>
+      </div>
+      <div class="lib-io">
+        <button class="small ghost" id="btnExportLib">Export Library</button>
+        <button class="small ghost" id="btnImportLib">Import Library</button>
+        <button class="small ghost danger" id="btnClearLib">Reset Library</button>
+        <input type="file" id="libFileInput" accept="application/json" style="display:none">
+      </div>
+
+      <div class="divider"></div>
+
+      <div id="roiSection">
+        <label class="field">Etch Zone(s) <span id="roiCountLbl" style="color:var(--laser)">0 marked</span></label>
+        <p style="font-family:var(--mono);font-size:11px;color:var(--alu-dim);margin:0 0 10px;line-height:1.6;">Drag on the image to box each spot an etch mark is expected. Saved templates auto-apply to new images.</p>
+        <div class="roi-list" id="roiList"></div>
+      </div>
+
+      <div class="divider"></div>
+
+      <label class="field">Classification Margin</label>
+      <div class="slider-row"><input type="range" id="sensitivity" min="1" max="100" value="50"><span class="slider-val" id="sensitivityVal">50</span></div>
+
+      <div id="missingFields">
+        <label class="field">Minimum Etch Coverage Required</label>
+        <div class="num-row"><input type="number" id="minCoverage" value="2" step="0.5" min="0"><span style="font-family:var(--mono);font-size:11px;color:var(--alu-dim);">% of zone area</span></div>
+      </div>
+      <div id="surfaceFields" style="display:none;">
+        <label class="field">Fail Threshold — Defect Area %</label>
+        <div class="num-row"><input type="number" id="failThreshold" value="0.05" step="0.01" min="0"><span style="font-family:var(--mono);font-size:11px;color:var(--alu-dim);">% of surface</span></div>
+      </div>
+
+      <div class="divider"></div>
+      <button class="primary" id="btnRun" style="width:100%;padding:12px;font-size:13px;" disabled>Run Inspection</button>
+
+      <div class="result-badge idle" id="resultBadge" style="margin-top:14px;">
+        <div class="label" id="resultLabel">STANDBY</div>
+        <div class="sub" id="resultSub">Awaiting image and sample</div>
+      </div>
+
+      <div class="metrics" id="metricsRow">
+        <div class="metric"><div class="k">Coverage</div><div class="v" id="metricArea">—</div></div>
+        <div class="metric"><div class="k">Required</div><div class="v" id="metricThresh">—</div></div>
+      </div>
+
+      <div class="divider"></div>
+      <p class="panel-title" style="margin-bottom:8px;">How To Use</p>
+      <ol class="instructions" id="instructionsList"></ol>
+    </div>
+
+  </div>
+
+  <footer class="note">All processing and the sample library stay on this device (browser local storage). Nothing is uploaded anywhere.</footer>
+</div>
+
+<script>
+(function(){
+  const $ = id => document.getElementById(id);
+  const stage=$('stage'), overlay=$('overlay');
+  const sctx=stage.getContext('2d',{willReadFrequently:true});
+  const octx=overlay.getContext('2d');
+  const placeholder=$('placeholder'), stageWrap=$('stageWrap'), imgDims=$('imgDims');
+  const btnUpload=$('btnUpload'), fileInput=$('fileInput'), cameraFileInput=$('cameraFileInput'), btnCamStart=$('btnCamStart'), btnCapture=$('btnCapture');
+  const btnClearRois=$('btnClearRois'), btnSaveTemplate=$('btnSaveTemplate'), btnNewImage=$('btnNewImage'), btnRun=$('btnRun'), btnFlip=$('btnFlip');
+  const video=$('cam');
+  const sensitivity=$('sensitivity'), sensitivityVal=$('sensitivityVal');
+  const failThreshold=$('failThreshold'), minCoverage=$('minCoverage');
+  const roiList=$('roiList'), roiCountLbl=$('roiCountLbl'), roiSection=$('roiSection');
+  const missingFields=$('missingFields'), surfaceFields=$('surfaceFields');
+  const modeHint=$('modeHint'), brandSub=$('brandSub'), instructionsList=$('instructionsList'), metricsRow=$('metricsRow');
+  const modeMissingBtn=$('modeMissingBtn'), modeSurfaceBtn=$('modeSurfaceBtn');
+  const teachTargetBtn=$('teachTargetBtn'), teachBgBtn=$('teachBgBtn');
+  const targetList=$('targetList'), bgList=$('bgList'), targetCount=$('targetCount'), bgCount=$('bgCount');
+  const targetHeadLabel=$('targetHeadLabel'), bgHeadLabel=$('bgHeadLabel'), targetLabel=$('targetLabel'), bgLabel=$('bgLabel');
+  const btnExportLib=$('btnExportLib'), btnImportLib=$('btnImportLib'), btnClearLib=$('btnClearLib'), libFileInput=$('libFileInput');
+  const reteachBanner=$('reteachBanner'), libStatus=$('libStatus');
+  const resultBadge=$('resultBadge'), resultLabel=$('resultLabel'), resultSub=$('resultSub'), metricArea=$('metricArea'), metricThresh=$('metricThresh');
+
+  const buffer=document.createElement('canvas'), bctx=buffer.getContext('2d',{willReadFrequently:true});
+
+  const LS_LIB='anodizeInspector.library.v1';
+  const LS_TPL='anodizeInspector.zoneTemplate.v1';
+
+  let hasImage=false, rois=[], stream=null, mode='missing', teachClass='target', mirrored=false;
+  let dragging=false, dragStart=null, dragMoved=false;
+  let library = { missing:{target:[],background:[]}, surface:{target:[],background:[]} };
+  let zoneTemplate = null; // {rois:[{xPct,yPct,wPct,hPct}]}
+
+  function loadPersisted(){
+    try{ const raw=localStorage.getItem(LS_LIB); if(raw) library=JSON.parse(raw); }catch(e){}
+    try{ const raw=localStorage.getItem(LS_TPL); if(raw) zoneTemplate=JSON.parse(raw); }catch(e){}
+  }
+  function persistLib(){ try{ localStorage.setItem(LS_LIB, JSON.stringify(library)); libStatus.textContent='LIBRARY SAVED'; setTimeout(()=>libStatus.textContent='LIBRARY LOADED',900);}catch(e){ libStatus.textContent='STORAGE UNAVAILABLE'; } }
+  function persistTpl(){ try{ localStorage.setItem(LS_TPL, JSON.stringify(zoneTemplate)); }catch(e){} }
+  loadPersisted();
+
+  const HINTS={
+    missing:'Teach "Etch Mark" from a good etched spot and "Normal Surface" from plain anodize nearby. The zone is compared against both — whichever it resembles more wins. More samples in each class = more accurate.',
+    surface:'Teach "Defect" from a bare-aluminum spot and "Normal Surface" from good black anodize. Every pixel in the image is classified against both.'
+  };
+  const INSTR={
+    missing:[
+      'Load a part image via <b>upload</b> or the <b>camera</b>.',
+      'Set Teaching to <b>Etch Mark</b>, click a good etched spot; switch to <b>Normal Surface</b>, click plain anodize.',
+      'Drag a box around each spot where a mark is <b>expected</b>. Save it as a template so future images auto-apply it.',
+      'Press <b>Run Inspection</b>. If a result looks wrong, teach the missed spot — the library keeps growing, nothing taught before is lost.'
+    ],
+    surface:[
+      'Load a part image via <b>upload</b> or the <b>camera</b>.',
+      'Set Teaching to <b>Defect</b>, click a bare-aluminum spot; switch to <b>Normal Surface</b>, click good anodize.',
+      'Adjust the <b>margin</b> if matches look too loose or too strict.',
+      'Press <b>Run Inspection</b> to scan the full surface.'
+    ]
+  };
+
+  function renderInstructions(){ instructionsList.innerHTML=INSTR[mode].map(t=>'<li>'+t+'</li>').join(''); modeHint.innerHTML='<b>Tip:</b> '+HINTS[mode]; }
+
+  function setMode(m){
+    mode=m;
+    modeMissingBtn.classList.toggle('active', m==='missing');
+    modeSurfaceBtn.classList.toggle('active', m==='surface');
+    roiSection.style.display = m==='missing' ? 'block':'none';
+    missingFields.style.display = m==='missing' ? 'block':'none';
+    surfaceFields.style.display = m==='surface' ? 'block':'none';
+    btnClearRois.style.display = m==='missing' ? 'inline-block':'none';
+    btnSaveTemplate.style.display = m==='missing' ? 'inline-block':'none';
+    brandSub.textContent = m==='missing' ? 'Missing-Etch Detection — Master Sample Library' : 'Surface Defect Detection — Master Sample Library';
+    targetHeadLabel.textContent = m==='missing' ? 'Etch Mark Color' : 'Defect Color';
+    targetLabel.textContent = m==='missing' ? 'Etch Mark' : 'Defect';
+    bgHeadLabel.textContent = 'Normal Surface Color';
+    metricsRow.querySelector('.metric:first-child .k').textContent = m==='missing' ? 'Worst Zone Coverage' : 'Defect Area';
+    metricsRow.querySelector('.metric:nth-child(2) .k').textContent = 'Required';
+    renderInstructions(); renderLibraryLists(); resetResult(); updateRunEnabled();
+    if(hasImage) redrawPersistentOverlay();
+  }
+  modeMissingBtn.onclick=()=>setMode('missing');
+  modeSurfaceBtn.onclick=()=>setMode('surface');
+
+  function setTeach(c){
+    teachClass=c;
+    teachTargetBtn.classList.toggle('active-target', c==='target');
+    teachBgBtn.classList.toggle('active-bg', c==='background');
+  }
+  teachTargetBtn.onclick=()=>setTeach('target');
+  teachBgBtn.onclick=()=>setTeach('background');
+
+  sensitivity.addEventListener('input', ()=> sensitivityVal.textContent=sensitivity.value);
+
+  function setStageSize(w,h){
+    const maxW=stageWrap.clientWidth||640;
+    const scale=Math.min(1, maxW/w);
+    const dispW=Math.round(w*scale), dispH=Math.round(h*scale);
+    [stage,overlay].forEach(c=>{c.width=dispW;c.height=dispH;c.style.width=dispW+'px';c.style.height=dispH+'px';});
+    stageWrap.style.minHeight=dispH+'px';
+  }
+
+  function applyTemplateToCurrentImage(){
+    rois=[];
+    if(zoneTemplate && zoneTemplate.rois && zoneTemplate.rois.length){
+      zoneTemplate.rois.forEach(t=>{
+        rois.push({
+          x: Math.round(t.xPct*buffer.width), y: Math.round(t.yPct*buffer.height),
+          w: Math.round(t.wPct*buffer.width), h: Math.round(t.hPct*buffer.height)
+        });
+      });
+    }
+    renderRoiList();
+    btnClearRois.disabled = rois.length===0;
+    btnSaveTemplate.disabled = rois.length===0;
+  }
+
+  function drawImageToStage(source,w,h){
+    buffer.width=w; buffer.height=h; bctx.drawImage(source,0,0,w,h);
+    setStageSize(w,h);
+    sctx.clearRect(0,0,stage.width,stage.height); sctx.drawImage(buffer,0,0,stage.width,stage.height);
+    octx.clearRect(0,0,overlay.width,overlay.height);
+    placeholder.style.display='none'; stage.style.display='block';
+    hasImage=true; imgDims.textContent=w+'×'+h+'px';
+    applyTemplateToCurrentImage();
+    resetResult(); btnNewImage.disabled=false; updateRunEnabled();
+    redrawPersistentOverlay();
+  }
+
+  function handleFileSelected(file, inputEl){
+    if(!file) return;
+    if(!file.type || !file.type.startsWith('image/')){
+      alert('That file doesn\'t look like a supported image (got: '+(file.type||'unknown type')+'). Use JPG, PNG, or WebP — HEIC photos from iPhones often need converting first.');
+      inputEl.value=''; return;
+    }
+    const objectUrl=URL.createObjectURL(file);
+    const img=new Image();
+    img.onload=()=>{
+      stopCamera();
+      drawImageToStage(img,img.naturalWidth,img.naturalHeight);
+      URL.revokeObjectURL(objectUrl);
+      inputEl.value='';
+    };
+    img.onerror=()=>{
+      alert('Could not load "'+file.name+'". The file may be corrupted or in a format this browser can\'t decode (e.g. HEIC). Try a JPG or PNG.');
+      URL.revokeObjectURL(objectUrl);
+      inputEl.value='';
+    };
+    img.src=objectUrl;
+  }
+  fileInput.addEventListener('change', e=> handleFileSelected(e.target.files[0], fileInput));
+  cameraFileInput.addEventListener('change', e=> handleFileSelected(e.target.files[0], cameraFileInput));
+
+  btnCamStart.addEventListener('click', async ()=>{
+    if(stream){ stopCamera(); return; }
+    try{
+      stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
+      video.srcObject=stream;
+      placeholder.style.display='none';
+      stage.style.display='none';
+      overlay.style.display='none';
+      video.style.display='block';
+      video.style.transform = mirrored ? 'scaleX(-1)' : 'none';
+      btnFlip.style.display='inline-block';
+      stageWrap.style.minHeight='340px';
+      btnCapture.disabled=false; btnCamStart.textContent='Stop Camera';
+      try{ await video.play(); }catch(playErr){ /* some browsers auto-play already; ignore */ }
+    }catch(err){ alert('Camera unavailable: '+(err.name||'')+' — '+err.message); }
+  });
+  function stopCamera(){
+    if(stream){stream.getTracks().forEach(t=>t.stop()); stream=null;}
+    btnCapture.disabled=true; btnCamStart.textContent='Start Camera';
+    video.style.display='none';
+    btnFlip.style.display='none';
+    overlay.style.display='block';
+    if(hasImage){ stage.style.display='block'; }
+    else { placeholder.style.display='block'; }
+  }
+
+  btnCapture.addEventListener('click', ()=>{
+    if(!video.videoWidth) return;
+    if(mirrored){
+      const w=video.videoWidth, h=video.videoHeight;
+      const tmp=document.createElement('canvas'); tmp.width=w; tmp.height=h;
+      const tctx=tmp.getContext('2d');
+      tctx.translate(w,0); tctx.scale(-1,1);
+      tctx.drawImage(video,0,0,w,h);
+      drawImageToStage(tmp, w, h);
+    } else {
+      drawImageToStage(video,video.videoWidth,video.videoHeight);
+    }
+    stopCamera();
+  });
+  btnFlip.addEventListener('click', ()=>{
+    mirrored = !mirrored;
+    video.style.transform = mirrored ? 'scaleX(-1)' : 'none';
+  });
+
+  btnNewImage.addEventListener('click', ()=>{
+    hasImage=false; stage.style.display='none'; placeholder.style.display='block';
+    placeholder.innerHTML='No image loaded.<br><b>Upload a photo</b> or <b>start the camera</b> to begin inspection.';
+    octx.clearRect(0,0,overlay.width,overlay.height); imgDims.textContent='';
+    rois=[]; renderRoiList(); resetResult(); btnNewImage.disabled=true; updateRunEnabled();
+  });
+
+  // ---- pointer: drag = ROI (missing mode), click = teach sample ----
+  stage.addEventListener('mousedown', e=>{
+    if(!hasImage) return;
+    dragging=true; dragMoved=false;
+    const rect=stage.getBoundingClientRect();
+    dragStart={x:e.clientX-rect.left, y:e.clientY-rect.top};
+  });
+  stage.addEventListener('mousemove', e=>{
+    if(!dragging||!hasImage) return;
+    const rect=stage.getBoundingClientRect();
+    const cur={x:e.clientX-rect.left, y:e.clientY-rect.top};
+    if(Math.abs(cur.x-dragStart.x)>4||Math.abs(cur.y-dragStart.y)>4) dragMoved=true;
+    if(mode==='missing' && dragMoved){
+      redrawPersistentOverlay();
+      octx.save(); octx.strokeStyle='#5ad1e6'; octx.setLineDash([5,3]); octx.lineWidth=1.5;
+      octx.strokeRect(Math.min(dragStart.x,cur.x),Math.min(dragStart.y,cur.y),Math.abs(cur.x-dragStart.x),Math.abs(cur.y-dragStart.y));
+      octx.restore();
+    }
+  });
+  stage.addEventListener('mouseup', e=>{
+    if(!dragging||!hasImage){ dragging=false; return; }
+    dragging=false;
+    const rect=stage.getBoundingClientRect();
+    const end={x:e.clientX-rect.left, y:e.clientY-rect.top};
+    const scaleX=buffer.width/stage.width, scaleY=buffer.height/stage.height;
+
+    if(mode==='missing' && dragMoved){
+      const x0=Math.min(dragStart.x,end.x), y0=Math.min(dragStart.y,end.y);
+      const w=Math.abs(end.x-dragStart.x), h=Math.abs(end.y-dragStart.y);
+      if(w>5 && h>5){
+        rois.push({x:Math.round(x0*scaleX),y:Math.round(y0*scaleY),w:Math.round(w*scaleX),h:Math.round(h*scaleY)});
+        renderRoiList(); btnClearRois.disabled=false; btnSaveTemplate.disabled=false;
+      }
+      redrawPersistentOverlay(); updateRunEnabled();
+      return;
+    }
+    // teach sample
+    const dx=dragStart.x*scaleX, dy=dragStart.y*scaleY;
+    const px=Math.max(2,Math.min(buffer.width-3,Math.round(dx)));
+    const py=Math.max(2,Math.min(buffer.height-3,Math.round(dy)));
+    const patch=bctx.getImageData(px-2,py-2,5,5).data;
+    let r=0,g=0,b=0,n=0;
+    for(let i=0;i<patch.length;i+=4){r+=patch[i];g+=patch[i+1];b+=patch[i+2];n++;}
+    r=Math.round(r/n); g=Math.round(g/n); b=Math.round(b/n);
+    library[mode][teachClass].push({r,g,b,t:Date.now()});
+    persistLib(); renderLibraryLists(); redrawPersistentOverlay(); resetResult(); updateRunEnabled();
+  });
+
+  function renderLibraryLists(){
+    const t=library[mode].target, bgArr=library[mode].background;
+    targetCount.textContent=t.length; bgCount.textContent=bgArr.length;
+    targetList.innerHTML = t.length ? t.map((s,i)=>`<div class="swatch" style="background:rgb(${s.r},${s.g},${s.b})" data-cls="target" data-i="${i}"></div>`).join('') : '<span class="empty-note">none taught yet</span>';
+    bgList.innerHTML = bgArr.length ? bgArr.map((s,i)=>`<div class="swatch" style="background:rgb(${s.r},${s.g},${s.b})" data-cls="background" data-i="${i}"></div>`).join('') : '<span class="empty-note">none taught yet</span>';
+  }
+  [targetList,bgList].forEach(list=>{
+    list.addEventListener('click', e=>{
+      const sw=e.target.closest('.swatch'); if(!sw) return;
+      const cls=sw.getAttribute('data-cls'), idx=parseInt(sw.getAttribute('data-i'),10);
+      library[mode][cls].splice(idx,1);
+      persistLib(); renderLibraryLists(); updateRunEnabled();
+    });
+  });
+
+  btnExportLib.addEventListener('click', ()=>{
+    const blob=new Blob([JSON.stringify({library, zoneTemplate}, null, 2)], {type:'application/json'});
+    const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+    a.download='anodize-inspector-library.json'; a.click();
+  });
+  btnImportLib.onclick=()=>libFileInput.click();
+  libFileInput.addEventListener('change', e=>{
+    const file=e.target.files[0]; if(!file) return;
+    const reader=new FileReader();
+    reader.onload=()=>{
+      try{
+        const parsed=JSON.parse(reader.result);
+        if(parsed.library){
+          ['missing','surface'].forEach(m=>{
+            ['target','background'].forEach(c=>{
+              const incoming=(parsed.library[m]&&parsed.library[m][c])||[];
+              library[m][c]=library[m][c].concat(incoming); // merge, keep existing knowledge
+            });
+          });
+        }
+        if(parsed.zoneTemplate && (!zoneTemplate || !zoneTemplate.rois || !zoneTemplate.rois.length)){
+          zoneTemplate=parsed.zoneTemplate; persistTpl();
+        }
+        persistLib(); renderLibraryLists(); updateRunEnabled();
+        alert('Library merged. Existing samples were kept, imported ones added.');
+      }catch(err){ alert('Could not read that file: '+err.message); }
+    };
+    reader.readAsText(file);
+    libFileInput.value='';
+  });
+  btnClearLib.addEventListener('click', ()=>{
+    if(!confirm('Reset the entire master library for BOTH modes? This deletes all taught samples permanently.')) return;
+    library={missing:{target:[],background:[]}, surface:{target:[],background:[]}};
+    persistLib(); renderLibraryLists(); updateRunEnabled();
+  });
+
+  function renderRoiList(){
+    roiCountLbl.textContent=rois.length+' marked';
+    roiList.innerHTML = rois.length ? rois.map((r,i)=>`<div class="roi-row" data-idx="${i}"><span class="tag">ZONE ${i+1}</span><span class="tag">${r.w}×${r.h}px</span></div>`).join('') : '';
+  }
+  btnClearRois.addEventListener('click', ()=>{ rois=[]; renderRoiList(); btnClearRois.disabled=true; btnSaveTemplate.disabled=true; redrawPersistentOverlay(); resetResult(); updateRunEnabled(); });
+  btnSaveTemplate.addEventListener('click', ()=>{
+    if(!rois.length || !hasImage) return;
+    zoneTemplate={ rois: rois.map(r=>({xPct:r.x/buffer.width, yPct:r.y/buffer.height, wPct:r.w/buffer.width, hPct:r.h/buffer.height})) };
+    persistTpl();
+    alert('Zone template saved. It will auto-apply to every new image from now on.');
+  });
+
+  function redrawPersistentOverlay(){
+    octx.clearRect(0,0,overlay.width,overlay.height);
+    const sx=stage.width/buffer.width, sy=stage.height/buffer.height;
+    rois.forEach((r,i)=>{
+      octx.save();
+      octx.strokeStyle='#5ad1e6'; octx.lineWidth=1.5; octx.setLineDash([]);
+      const dx=r.x*sx, dy=r.y*sy, dw=r.w*sx, dh=r.h*sy;
+      octx.strokeRect(dx,dy,dw,dh);
+      octx.fillStyle='rgba(90,209,230,0.10)'; octx.fillRect(dx,dy,dw,dh);
+      octx.fillStyle='#5ad1e6'; octx.font='10px ui-monospace, monospace'; octx.fillText('ZONE '+(i+1), dx+4, dy+13);
+      octx.restore();
+    });
+  }
+
+  function updateRunEnabled(){
+    if(!hasImage){ btnRun.disabled=true; return; }
+    if(library[mode].target.length===0){ btnRun.disabled=true; return; }
+    if(mode==='missing' && rois.length===0){ btnRun.disabled=true; return; }
+    btnRun.disabled=false;
+  }
+
+  function resetResult(){
+    resultBadge.className='result-badge idle';
+    resultLabel.textContent='STANDBY';
+    resultSub.textContent = !hasImage ? 'Awaiting image' : (library[mode].target.length===0 ? 'Teach at least one target sample' : (mode==='missing'&&rois.length===0 ? 'Mark at least one etch zone' : 'Ready — press Run Inspection'));
+    metricArea.textContent='—'; metricThresh.textContent='—';
+    reteachBanner.style.display='none';
+  }
+
+  btnRun.addEventListener('click', ()=>{
+    if(btnRun.disabled) return;
+    stageWrap.classList.add('scanning'); btnRun.disabled=true;
+    setTimeout(()=>{ mode==='missing' ? runMissingEtchInspection() : runSurfaceInspection(); }, 650);
+  });
+
+  function classify(w,h,bias,sensVal,boundsList){
+    const data=bctx.getImageData(0,0,w,h); const px=data.data;
+    const targetArr=library[mode].target, bgArr=library[mode].background;
+    const maskCanvas=document.createElement('canvas'); maskCanvas.width=w; maskCanvas.height=h;
+    const mctx=maskCanvas.getContext('2d'); const maskImg=mctx.createImageData(w,h); const mpx=maskImg.data;
+    const counts = boundsList ? boundsList.map(()=>0) : null;
+    let totalMatches=0;
+    const fallbackThreshold = 25 + sensVal * 1.15; // used only if no background samples taught
+
+    for(let y=0;y<h;y++){
+      for(let x=0;x<w;x++){
+        const i=(y*w+x)*4; const r=px[i],g=px[i+1],b=px[i+2];
+        let dT=Infinity;
+        for(let s=0;s<targetArr.length;s++){ const sm=targetArr[s]; const dr=r-sm.r,dg=g-sm.g,db=b-sm.b; const d=Math.sqrt(dr*dr+dg*dg+db*db); if(d<dT) dT=d; }
+        let isMatch;
+        if(bgArr.length>0){
+          let dB=Infinity;
+          for(let s=0;s<bgArr.length;s++){ const sm=bgArr[s]; const dr=r-sm.r,dg=g-sm.g,db=b-sm.b; const d=Math.sqrt(dr*dr+dg*dg+db*db); if(d<dB) dB=d; }
+          isMatch = (dT - bias) < dB;
+        } else {
+          isMatch = dT <= fallbackThreshold;
+        }
+        if(isMatch){
+          totalMatches++;
+          mpx[i]=255; mpx[i+1]=60; mpx[i+2]=45; mpx[i+3]=165;
+          if(counts){ for(let bIdx=0; bIdx<boundsList.length; bIdx++){ const r2=boundsList[bIdx]; if(x>=r2.x&&x<r2.x+r2.w&&y>=r2.y&&y<r2.y+r2.h) counts[bIdx]++; } }
+        }
+      }
+    }
+    mctx.putImageData(maskImg,0,0);
+    return {maskCanvas, totalMatches, counts};
+  }
+
+  function runMissingEtchInspection(){
+    const w=buffer.width,h=buffer.height;
+    const sensVal=parseInt(sensitivity.value,10);
+    const bias=(sensVal-50)*0.6;
+    const required=parseFloat(minCoverage.value);
+    const requiredSafe = (isNaN(required) || required<=0) ? 2 : required;
+    const {maskCanvas, counts}=classify(w,h,bias,sensVal,rois);
+
+    octx.clearRect(0,0,overlay.width,overlay.height);
+    redrawPersistentOverlay();
+    octx.globalAlpha=1; octx.drawImage(maskCanvas,0,0,overlay.width,overlay.height);
+
+    let worstPct=Infinity, anyMissing=false;
+    const rows=rois.map((r,i)=>{
+      const area=r.w*r.h; const pct=area>0?(counts[i]/area)*100:0;
+      if(pct<worstPct) worstPct=pct;
+      const ok=pct>=requiredSafe; if(!ok) anyMissing=true;
+      return {i,pct,ok};
+    });
+    roiList.innerHTML=rows.map(row=>`<div class="roi-row"><span class="tag">ZONE ${row.i+1}</span><span class="val ${row.ok?'ok':'bad'}">${row.pct.toFixed(2)}% — ${row.ok?'ETCH FOUND':'MISSING'}</span></div>`).join('');
+
+    const pass=!anyMissing;
+    metricArea.textContent=worstPct.toFixed(2)+'%'; metricThresh.textContent='≥ '+requiredSafe.toFixed(2)+'%';
+    resultBadge.className='result-badge '+(pass?'pass':'fail');
+    resultLabel.textContent=pass?'PASS':'FAIL';
+    resultSub.textContent=pass?'Laser etch present in all marked zones':'Missing process — no laser etch detected in one or more zones';
+    reteachBanner.style.display='block';
+    stageWrap.classList.remove('scanning'); btnRun.disabled=false;
+  }
+
+  function runSurfaceInspection(){
+    const w=buffer.width,h=buffer.height;
+    const sensVal=parseInt(sensitivity.value,10);
+    const bias=(sensVal-50)*0.6;
+    const failPct=parseFloat(failThreshold.value)||0;
+    const {maskCanvas, totalMatches}=classify(w,h,bias,sensVal,null);
+    octx.clearRect(0,0,overlay.width,overlay.height);
+    octx.drawImage(maskCanvas,0,0,overlay.width,overlay.height);
+    const defectPct=(totalMatches/(w*h))*100;
+    const pass=defectPct<=failPct;
+    metricArea.textContent=defectPct.toFixed(3)+'%'; metricThresh.textContent='≤ '+failPct.toFixed(2)+'%';
+    resultBadge.className='result-badge '+(pass?'pass':'fail');
+    resultLabel.textContent=pass?'PASS':'FAIL';
+    resultSub.textContent=pass?'No significant bare-aluminum exposure detected':'Bare-aluminum exposure exceeds threshold';
+    reteachBanner.style.display='block';
+    stageWrap.classList.remove('scanning'); btnRun.disabled=false;
+  }
+
+  window.addEventListener('resize', ()=>{
+    if(hasImage){ setStageSize(buffer.width,buffer.height); sctx.clearRect(0,0,stage.width,stage.height); sctx.drawImage(buffer,0,0,stage.width,stage.height); redrawPersistentOverlay(); }
+  });
+
+  renderInstructions(); renderLibraryLists(); setMode('missing');
+
+  // ---- PWA install + service worker (only works when served via http/https/localhost, not file://) ----
+  if('serviceWorker' in navigator && (location.protocol==='https:' || location.hostname==='localhost' || location.hostname==='127.0.0.1')){
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('service-worker.js').catch(()=>{});
+    });
+  }
+  let deferredInstallPrompt = null;
+  const btnInstall = $('btnInstall');
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredInstallPrompt = e;
+    btnInstall.style.display = 'inline-block';
+  });
+  btnInstall.addEventListener('click', async () => {
+    if(!deferredInstallPrompt) return;
+    deferredInstallPrompt.prompt();
+    await deferredInstallPrompt.userChoice;
+    deferredInstallPrompt = null;
+    btnInstall.style.display = 'none';
+  });
+  window.addEventListener('appinstalled', () => { btnInstall.style.display = 'none'; });
+})();
+</script>
+</body>
+</html>
