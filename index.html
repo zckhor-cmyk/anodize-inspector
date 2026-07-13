@@ -381,8 +381,17 @@
     if(stream){ stopCamera(); return; }
     try{
       stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
-      video.srcObject=stream; btnCapture.disabled=false; btnCamStart.textContent='Stop Camera';
-    }catch(err){ alert('Camera unavailable: '+err.message); }
+      video.srcObject=stream;
+      placeholder.style.display='none';
+      stage.style.display='none';
+      overlay.style.display='none';
+      video.style.display='block';
+      video.style.transform = mirrored ? 'scaleX(-1)' : 'none';
+      btnFlip.style.display='inline-block';
+      stageWrap.style.minHeight='340px';
+      btnCapture.disabled=false; btnCamStart.textContent='Stop Camera';
+      try{ await video.play(); }catch(playErr){ /* some browsers auto-play already; ignore */ }
+    }catch(err){ alert('Camera unavailable: '+(err.name||'')+' — '+err.message); }
   });
   function stopCamera(){ if(stream){stream.getTracks().forEach(t=>t.stop()); stream=null;} btnCapture.disabled=true; btnCamStart.textContent='Start Camera'; }
 
